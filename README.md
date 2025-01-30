@@ -1,17 +1,18 @@
 # PlanetUNet
-A framework for detecting trees in satellite images using deep learning with a UNet architecture.
+A framework for detecting driftwood in satellite images using deep learning with a UNet architecture originally developed for tree mapping.
 
 ### Contributors
 ```
 Ankit Kariryaa - Original design and implementation of core framework for preprocessing, training and prediction
 Sizhuo Li      - Conversion to multi-band planet images and implementation of boundary weights channel
 Florian Reiner - New structure and config workflow, support for resampling and jp2 format, postprocessing
+Carl Stadie    - Aggregation of yearly predictions, feature filtering, adaption for driftwood mapping
 ```
 
 # Structure
-The code is structured around four main steps of the pipeline: `preprocessing.py`, `training.py`, `prediction.py` and `postprocessing.py`.  
+The code is structured around six main steps of the pipeline: `preprocessing.py`, `training.py`, `prediction.py`, `aggreagtion.py`, `postprocessing.py`, and `feature_filter.py`.  
 These steps are called from `main.py`, and rely on methods in `/core`.  
-The overall configuration class is stored under `/config/`, and is initialised and passed to the pipeline in `main.py`.
+The overall configuration class is stored under `/config/`, and is initialised and passed to the pipeline in `main.py`. For predictions of images form multiple years, each zear should have its own config-file.
 
 During preprocessing, the training areas are extracted from the training images, and stored in temporary preprocessed frames. Each frame contains the image channels and the two annotation channels (labels and boundary weights).
 
@@ -19,9 +20,11 @@ During training, the UNet model is trained with the pre-processed frames and sav
 
 During prediction, the trained model is used to predict trees in the prediction images. The output predictions are stored as compressed single-channel raster images.
 
+During aggregation, the yearly predictions are aggregated by claculating the probability of a positive prediction for each pixel and assigning a final prediction value through a probability thershold. 
+
 During postprocessing, the output predictions are polygonised to polygon files. These are then converted to simplified centroid files, with the area of the polygon as an attribute.
 For both these operations the prediction rasters are split into smaller grid chunks and processed in parallel. Vector VRT files are created to prevent creation and merging of very large geopackages, while still allowing viewing of large areas as one file.
-Finally density and canopy cover rasters are produced at coarser resolutions, with one file for the entire area. The density maps show number of trees per ha, with different crown size classes as bands.
+Finally density and driftwood cover rasters are produced at coarser resolutions, with one file for the entire area. The density maps show number of driftwood deposits per ha, with different crown deposit sizes as bands.
 
 
 # Setup
@@ -43,7 +46,7 @@ If using planet images with x3 resampling, the memory usage can be very high, an
 
 # Usage
 Before running `main.py`, the paths and general settings need to be configured in `config_default.py`.
-You can make separate config files for separate datasets or use cases, which can be selected in the first import in `main.py`.
+You can make separate config files for separate datasets or use cases and yearly predictions, which can be selected in the first import in `main.py`.
 
 Running `main.py` will run the whole pipeline of preprocessing, training, prediction and postprocessing. By default, training will use the most recent preprocessing data it can find, prediction will use the latest trained model, and postprocessing the latest predictions, but these can also be set in the config.
 
