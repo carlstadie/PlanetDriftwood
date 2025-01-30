@@ -4,6 +4,7 @@ import re
 import logging
 from tqdm import tqdm  # Import progress bar library
 from datetime import datetime, timezone
+import pandas as pd
 
 def setup_logging(log_file):
     """Set up logging to overwrite the log file each run."""
@@ -14,7 +15,7 @@ def read_mta_list(mta_list_path):
     file_zone_map = {}
     with mta_list_path.open('r') as f:
         for line in f:
-            parts = line.strip().split()
+            parts = line.strip().split()       
             if len(parts) == 2:
                 file_zone_map[parts[0]] = parts[1]
     return file_zone_map
