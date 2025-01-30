@@ -1,0 +1,33 @@
+import os
+import shutil
+import geopandas as gpd
+import pandas as pd
+
+# Load the CSV file into a DataFrame
+csv_file = r"N:\isipd\projects\p_planetdw\data\auxilliary\grd_utm.gpkg"  # Replace with your CSV file path
+df = gpd.read_file(csv_file)
+
+# Define the directory containing the images
+images_dir = r'n:\isipd\projects\p_planetdw\data\dw_detection\PlanetScope\images\2019'  # Replace with the path to your images directory
+
+# Define the output directory for zone folders
+output_dir = r'n:\isipd\projects\p_planetdw\data\dw_detection\PlanetScope\images\2019_utm'  # Replace with your desired output directory
+os.makedirs(output_dir, exist_ok=True)
+
+# Loop through each row in the DataFrame
+for index, row in df.iterrows():
+    img_id = str(row['id'])
+    zone = row['ZONE']
+    
+    # Create the zone directory if it doesn't exist
+    zone_dir = os.path.join(output_dir, zone)
+    os.makedirs(zone_dir, exist_ok=True)
+    
+    # Find images with the id in their name
+    for file_name in os.listdir(images_dir):
+        if img_id in file_name:
+            # Copy the image to the corresponding zone folder
+            source_path = os.path.join(images_dir, file_name)
+            destination_path = os.path.join(zone_dir, file_name)
+            shutil.copy2(source_path, destination_path)
+            print(f'Copied {file_name} to {zone_dir}')
