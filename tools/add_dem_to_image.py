@@ -4,6 +4,8 @@ import numpy as np
 from rasterio.warp import reproject, Resampling
 from tqdm import tqdm  # Progress bar
 
+#this is just a test
+
 def calculate_average_elevation_below_ndvi_threshold(img_data, dem_data, ndvi_band=4, threshold=10000): #shifted ndvi by 10000 so 10000 is 0
     """
     Calculate the average elevation of all DEM pixels where the NDVI (in the specified band) is below a threshold.
