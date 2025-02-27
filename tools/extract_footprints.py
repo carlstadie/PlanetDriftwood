@@ -4,11 +4,11 @@ import rasterio
 from rasterio.features import shapes
 
 # Define input and output directories
-folder_path = '/home/rscph/Desktop/images/2019'
-output_folder = '/home/rscph/Desktop/mosaic_footprints/2019'
+folder_path = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/training_data/training_data_within_aoi'
+output_folder = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/training_data/training_data_within_aoi/gpkg'
 
 # Get a list of all .jp2 files in the folder
-jp2_files = [f for f in os.listdir(folder_path) if f.endswith('.jp2')]
+jp2_files = [f for f in os.listdir(folder_path) if f.endswith('.tif')]
 
 # Get a list of all already processed files in the output folder
 processed_files = [f.replace('_footprints', '').replace('.gpkg', '') for f in os.listdir(output_folder) if
@@ -27,7 +27,7 @@ for jp2_file in jp2_files:
         print('Processing:', jp2_file)
 
         # Read the mask from the specified band (band 1 in this case)
-        mask = dataset.read_masks(1)
+        mask = dataset.read(6)
 
         # Extract CRS
         crs = dataset.crs

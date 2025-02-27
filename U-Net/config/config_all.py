@@ -9,7 +9,8 @@ class Configuration:
     def __init__(self):
 
         # --------- RUN NAME ---------
-        self.run_name = '2019'                     # custom name for this run, eg resampled_x3, alpha60, final_run_final_final
+        self.run_name = 'PlanetDW_Iteration_over_Years'                     # custom name for this run, eg resampled_x3, alpha60, final_run_final_final
+        self.predcition_years = [2019, 2021, 2023]                          # years where images are available
         # ---------- PATHS -----------
         # Path to training areas and polygons shapefiles
         self.training_data_dir = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/training/small_negatives/2019'
@@ -39,7 +40,7 @@ class Configuration:
        
 
         # Paths to input images to be predicted
-        self.to_predict_dir = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/images/2019_dem' #'/nfs/Planet/PlanetScope/Mosaics/South_Asia/2021'
+        self.to_predict_dir = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/images/year_dem' #for yearly predictions, the final folder before the images must have the year in it. Here use the 'year' placeholder in this path.
         self.to_predict_filelist = None          # [optional] path of a file with list of image paths to be predicted
 
         # Output path where predictions will be saved
@@ -49,7 +50,7 @@ class Configuration:
         self.trained_model_path = "/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/models/dem.h5"         # if set to None, it will use the most recent trained model
 
         # Path to prediction folder to be postprocessed
-        self.postprocessing_dir = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/results/2019'             # if set to None, it will run postprocessing on the last predictions
+        self.postprocessing_dir = '/isipd/projects/p_planetdw/data/dw_detection/PlanetScope/results/year'             # if set to None, it will run postprocessing on the last predictions
 
         # ------- IMAGE CONFIG ---------
         # Image file type, used to find images for training and prediction.
@@ -88,6 +89,15 @@ class Configuration:
         self.prediction_threshold = 0.5            # threshold applied when converting float predictions to binary
         self.prediction_mask_fps = []              # [optional] list of polygon mask files to limit prediction area
 
+        # --- AGGREAGTION CONFIG ---
+
+        self.grid_file = "/isipd/projects/p_planetdw/data/auxilliary/carl_na_new (copy).gpkg"
+        self.thresholds = [0.6, 0.5]  # Minimum probability to classify a pixel as present
+        self.min_obs = 1  # Minimum number of observations required for a valid pixel
+        self.no_data_value = np.nan  # Value for missing data
+        self.grid_size = (8, 8)  # Grid size for parallel processing
+        self.num_workers = 16  # Number of parallel workers
+
         # --- POSTPROCESSING CONFIG ----
         self.create_polygons = True                # To polygonize the raster predictions to polygon VRT
         self.create_centroids = False               # [needs polygons] To create centroids from polygons, with area in m2
@@ -98,6 +108,11 @@ class Configuration:
         self.canopy_resolutions = [100]            # resolutions of canopy cover maps to create, in m
         self.density_resolutions = [100]           # resolutions of density maps to create, in m
         self.area_thresholds = [20, 50, 100, 200, 300]    # thresholds of area classes used for bands in density maps, in m2
+        self.water_mask_fp = "/isipd/projects/p_planetdw/data/auxilliary/WaterMask/water.gpkg"
+        self.roads_fp = "/isipd/projects/p_planetdw/data/auxilliary/roads.gpkg"
+        self.min_area_threshold = 100               # Minimum polygon area threshold
+        self.water_overlap_threshold = 0.2          # Maximum allowed water overlap (30%)
+
 
         # ------ ADVANCED SETTINGS ------
         # GPU selection, if you have multiple GPUS.

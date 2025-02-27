@@ -312,71 +312,76 @@ def predict_image(params):
 
 @memory(percentage=99)
 def predict_all(conf):
-    """Predict trees in all the files in the input image dir. """
+    """Predict trees in all the files for each year defined in config.prediction_years."""
 
     global config
     config = conf
 
-    print("Starting prediction.")
-    start = time.time()
+    print("Starting prediction for multiple years.")
+    start_total = time.time()
 
-    # Create folder for output predictions
-    if config.prediction_output_dir is None:
-        config.prediction_output_dir = os.path.join(config.predictions_base_dir, time.strftime('%Y%m%d-%H%M') + '_' + config.prediction_name)
-    if not os.path.exists(config.prediction_output_dir):
-        os.mkdir(config.prediction_output_dir)
-    rasters_dir = os.path.join(config.prediction_output_dir, "rasters")
-    if not os.path.exists(rasters_dir):
-        os.mkdir(rasters_dir)
+    # Loop through each year defined in the config
+    for year in config.prediction_years:
+        print(f"\n=== Running prediction for {year} ===\n")
 
-    # Load model info
-    load_model_info()
+        # Update input and output paths dynamically
+        config.to_predict_dir = config.to_predict_dir.replace("2019", str(year))
+        config.prediction_output_dir = config.predictions_base_dir + f"/{year}"
 
-    # Get list of images to analyse
-    input_images = get_images_to_predict()
+        # Ensure output directory exists
+        os.makedirs(config.prediction_output_dir, exist_ok=True)
+        rasters_dir = os.path.join(config.prediction_output_dir, "rasters")
+        os.makedirs(rasters_dir, exist_ok=True)
 
-    # Combine possible multiple validity masks into one mask
-    config.validity_mask_fp = merge_validity_masks(config, input_images)
+        # Load model info
+        load_model_info()
 
-    # Process all input images
-    for image_fp in tqdm(input_images, desc=f"{'Analysing images':<25}", position=0):
+        # Get list of images to analyse
+        input_images = get_images_to_predict()
 
-        # Check if image has already been predicted
-        output_file = os.path.join(rasters_dir, config.output_prefix +
-                                   image_fp.split("/")[-1].replace(config.predict_images_file_type, ".tif"))
-        if os.path.isfile(output_file) and not config.overwrite_analysed_files:
-            print(f"File already analysed, skipping {image_fp}")
-            continue
+        # Combine possible multiple validity masks into one mask
+        config.validity_mask_fp = merge_validity_masks(config, input_images)
 
-        print(f"\nAnalysing {image_fp}")
-        t0 = time.time()
+        # Process all input images
+        for image_fp in tqdm(input_images, desc=f"Processing {year} images", position=0):
 
-        # Split into several smaller image chunks
-        params = split_image_to_chunks(image_fp, output_file, config)
-        if len(params) == 0:
-            print(f"No parts of the image intersect validity mask, skipping {image_fp}")
-            continue
+            # Check if image has already been predicted
+            output_file = os.path.join(rasters_dir, config.output_prefix +
+                                       image_fp.split("/")[-1].replace(config.predict_images_file_type, ".tif"))
+            if os.path.isfile(output_file) and not config.overwrite_analysed_files:
+                print(f"File already analysed, skipping {image_fp}")
+                continue
 
-        # Process image chunks in parallel
-        chunk_fps = []
-        multiprocessing.set_start_method("spawn", force=True)
-        with multiprocessing.Pool(processes=config.prediction_workers) as pool:
-            with tqdm(total=len(params), desc="Processing image chunks", position=1, leave=False) as pbar:
-                for result in pool.imap_unordered(predict_image, params, chunksize=1):
+            print(f"\nAnalysing {image_fp}")
+            t0 = time.time()
+
+            # Split into several smaller image chunks
+            params = split_image_to_chunks(image_fp, output_file, config)
+            if len(params) == 0:
+                print(f"No parts of the image intersect validity mask, skipping {image_fp}")
+                continue
+
+            # Process image chunks in parallel
+            chunk_fps = []
+            multiprocessing.set_start_method("spawn", force=True)
+            with multiprocessing.Pool(processes=config.prediction_workers) as pool:
+                with tqdm(total=len(params), desc="Processing image chunks", position=1, leave=False) as pbar:
+                    for result in pool.imap_unordered(predict_image, params, chunksize=1):
+                        pbar.update()
+                        if result:
+                            chunk_fps.append(result)
                     pbar.update()
-                    if result:
-                        chunk_fps.append(result)
-                pbar.update()
 
-        # Merge chunks back into one output raster
-        print(f"\nWriting raster to {output_file}")
-        gdal.BuildVRT(f"/vsimem/merged.vrt", chunk_fps)
-        options = ["TILED=YES", "BIGTIFF=IF_SAFER", "COMPRESS=LZW", "NBITS=1" if config.output_dtype == "bool" else ""]
-        gdal.Translate(output_file, f"/vsimem/merged.vrt", creationOptions=options)
+            # Merge chunks back into one output raster
+            print(f"\nWriting raster to {output_file}")
+            gdal.BuildVRT(f"/vsimem/merged.vrt", chunk_fps)
+            options = ["TILED=YES", "BIGTIFF=IF_SAFER", "COMPRESS=LZW", "NBITS=1" if config.output_dtype == "bool" else ""]
+            gdal.Translate(output_file, f"/vsimem/merged.vrt", creationOptions=options)
 
-        # Delete temp chunks
-        for f in chunk_fps:
-            os.remove(f)
-        print(f"Processed {image_fp} in: {str(timedelta(seconds=time.time() - t0))}\n")
+            # Delete temp chunks
+            for f in chunk_fps:
+                os.remove(f)
+            print(f"Processed {image_fp} in: {str(timedelta(seconds=time.time() - t0))}\n")
 
-    print(f"Prediction completed in {str(timedelta(seconds=time.time() - start)).split('.')[0]}.\n")
+    print(f"\n=== All years' predictions completed in {str(timedelta(seconds=time.time() - start_total)).split('.')[0]} ===\n")
+

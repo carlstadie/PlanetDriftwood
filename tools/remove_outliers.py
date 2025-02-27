@@ -4,7 +4,7 @@ from shapely.geometry import MultiPolygon, Polygon
 
 location_shape_filter = False
 
-output_path = "/isipd/projects/p_planetdw/data/outputs/dw_prob0506_filtered_maxwater03_presenceFalse_v2.gpkg"
+output_path = "/isipd/projects/p_planetdw/data/outputs/unfiltered.gpkg"
 
 # Paths to the GeoPackage files
 gdf1_path = "/isipd/projects/p_planetdw/data/outputs/dw_all_prob_05_aoi.gpkg"
@@ -64,7 +64,7 @@ intersection['road_intersects'] = intersection.geometry.apply(
 
 # Filter based on overlap and road intersections
 intersection_filtered = intersection[
-    (intersection['overlap_percentage'] <= 0.3) & (~intersection['road_intersects'])
+    (intersection['overlap_percentage'] <= 1) & (~intersection['road_intersects'])
 ]
 print("Feature processing completed.")
 
@@ -96,7 +96,7 @@ print("Computing features...")
 gdf_test = compute_features(intersection_filtered)
 
 # Filter inliers based on number of holes
-gdf_inliers = gdf_test[gdf_test['num_holes'] <= 3]
+gdf_inliers = gdf_test#[gdf_test['num_holes'] <= 3]
 
 # Save results
 print("Saving filtered GeoDataFrame...")
