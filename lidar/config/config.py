@@ -29,9 +29,13 @@ class Configuration:
 
         # ------ PREPROCESSING ------
 
+        self.multiple_targets = False  # If target areas are saved in one gdf set to True
+        self.target_name_field = 'name'  # Field in target area gdf to use as target name
+
         # SOR parameters
-        self.knn = 12  # number of k nearest neighbors, the higher hte more stable
-        self.multiplier = 2.2 # Determines the threshold for outlier rejection, the higher the more conservative
+        self.overlap = 0.2  # minimum overlap between pointcloud and AOI, 0.5 means 50% overlap
+        self.knn = 100  # number of k nearest neighbors, the higher hte more stable
+        self.multiplier = 20 # Determines the threshold for outlier rejection, the higher the more conservative
 
         # ------- PROCESSING --------
 
@@ -42,14 +46,17 @@ class Configuration:
         self.fill_gaps = True # use IDW to close gaps in rasters
         self.resolution = 1 # resoltion of generated rasters in meter, can be 'Auto' or number
 
-        self.point_density_method = 'density' # method to determine point density, can be 'sampling' (exact) or 'density' (fast)
+        self.point_density_method = 'sampling' # method to determine point density, can be 'sampling' (exact) or 'density' (fast)
         self.rigidness = 2 # rigidness of the simulated cloth, the lower the more flexible
-        self.iterations = 500 # number of simulation steps, the higher, the more adapted to the point cloud
+        self.iterations = 1000 # number of simulation steps, the higher, the more adapted to the point cloud
 
 
 
 
         # ------ ADVANCED SETTINGS ------
+        self.chunk_size = 5000 # Number of points to process in each chunk
+        self.num_workers = 4  # Number of parallel workers for processing
+
         # Set overall GDAL settings
         gdal.UseExceptions()  # Enable exceptions instead of silent failures
         gdal.SetCacheMax(32000000000)  # Set cache size in KB for GDAL operations

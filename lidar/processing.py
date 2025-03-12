@@ -80,7 +80,7 @@ def get_bounding_box(las_file):
     return min_x, max_x, min_y, max_y
 
 
-def generate_dsm(input_folder, output_folder, run_name, method, resolution=1.0, fill_gaps=True):
+def generate_dsm(input_folder, output_folder, run_name, method, resolution, fill_gaps=True):
     # Define the final output folder and ensure it exists.
     final_output_folder = os.path.join(output_folder, run_name, 'DSM')
     os.makedirs(final_output_folder, exist_ok=True)
@@ -106,7 +106,7 @@ def generate_dsm(input_folder, output_folder, run_name, method, resolution=1.0, 
             temp_dsm_path = os.path.join(temp_folder, f"{base_name}_dsm.tif")
             temp_filled_dsm_path = os.path.join(temp_folder, f"{base_name}_dsm_filled.tif")
             # Final DSM will be saved directly in the final output folder.
-            final_dsm_path = os.path.join(final_output_folder, f"{base_name}.tif")
+            final_dsm_path = os.path.join(final_output_folder, f"{base_name}_DSM.tif")
             
             # Check resolution suitability.
             avg_spacing, is_resolution_ok = check_resolution(las_file, resolution, method)
@@ -169,9 +169,9 @@ def generate_dsm(input_folder, output_folder, run_name, method, resolution=1.0, 
     print(f"\nDSM generation completed in {elapsed_time}.")
 
 
-def generate_dem(input_folder, output_folder, run_name, method, rigidness, iterations, resolution=1.0, fill_gaps=True):
+def generate_dtm(input_folder, output_folder, run_name, method, rigidness, iterations, resolution, fill_gaps=True):
     """
-    Generates a DEM from LAS/LAZ files using the cloth simulation filtering (CSF) method.
+    Generates a DTM from LAS/LAZ files using the cloth simulation filtering (CSF) method.
     
     Parameters:
         input_folder (str): The base folder containing input point cloud files.
@@ -179,10 +179,10 @@ def generate_dem(input_folder, output_folder, run_name, method, rigidness, itera
         run_name (str): The subfolder (or run identifier) within input_folder.
         method (str): The ground filtering method to use (e.g., 'cloth').
         resolution (float): The output grid resolution in meters.
-        fill_gaps (bool): Whether to run gap-filling on the output DEM.
+        fill_gaps (bool): Whether to run gap-filling on the output DTM.
     """
     # Define the final output folder and ensure it exists.
-    final_output_folder = os.path.join(output_folder, run_name, 'DEM')
+    final_output_folder = os.path.join(output_folder, run_name, 'DTM')
     os.makedirs(final_output_folder, exist_ok=True)
     
     # Create a temporary folder for intermediate outputs.
@@ -197,17 +197,17 @@ def generate_dem(input_folder, output_folder, run_name, method, rigidness, itera
                 glob.glob(os.path.join(input_folder, run_name, "*.laz"))
     
     if not las_files:
-        print("No LAS/LAZ files found. Exiting DEM generation.")
+        print("No LAS/LAZ files found. Exiting DTM generation.")
         return
     
-    for las_file in tqdm(las_files, desc="Processing DEMs", unit="file"):
+    for las_file in tqdm(las_files, desc="Processing DTMs", unit="file"):
         try:
             base_name = os.path.splitext(os.path.basename(las_file))[0]
-            # Temporary DEM paths.
-            temp_dem_path = os.path.join(temp_folder, f"{base_name}_dem.tif")
-            temp_filled_dem_path = os.path.join(temp_folder, f"{base_name}_dem_filled.tif")
-            # Final DEM will be saved directly in the final output folder.
-            final_dem_path = os.path.join(final_output_folder, f"{base_name}.tif")
+            # Temporary DTM paths.
+            temp_DTM_path = os.path.join(temp_folder, f"{base_name}_DTM.tif")
+            temp_filled_DTM_path = os.path.join(temp_folder, f"{base_name}_DTM_filled.tif")
+            # Final DTM will be saved directly in the final output folder.
+            final_DTM_path = os.path.join(final_output_folder, f"{base_name}_DTM.tif")
 
             avg_spacing, is_resolution_ok = check_resolution(las_file, resolution, method)
             resolution = avg_spacing
@@ -224,7 +224,7 @@ def generate_dem(input_folder, output_folder, run_name, method, rigidness, itera
                 # Filter only ground points (assuming CSF sets ground points to classification 2)
                 {"type": "filters.range", "limits": "Classification[2:2]"},
                 {"type": "writers.gdal",
-                 "filename": temp_dem_path,
+                 "filename": temp_DTM_path,
                  "resolution": resolution,
                  "output_type": "mean",
                  "nodata": -9999,
@@ -240,14 +240,14 @@ def generate_dem(input_folder, output_folder, run_name, method, rigidness, itera
                     "gdal_fillnodata.py",
                     "-md", "10",
                     "-si", "2",
-                    temp_dem_path,
-                    temp_filled_dem_path
+                    temp_DTM_path,
+                    temp_filled_DTM_path
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                # Move the gap-filled DEM to the final output folder.
-                os.replace(temp_filled_dem_path, final_dem_path)
+                # Move the gap-filled DTM to the final output folder.
+                os.replace(temp_filled_DTM_path, final_DTM_path)
             else:
-                # Move the initial DEM.
-                os.rename(temp_dem_path, final_dem_path)
+                # Move the initial DTM.
+                os.rename(temp_DTM_path, final_DTM_path)
                 
         except Exception as e:
             print(f"Error processing {las_file}: {e}")
@@ -257,23 +257,23 @@ def generate_dem(input_folder, output_folder, run_name, method, rigidness, itera
         shutil.rmtree(temp_folder)
     
     elapsed_time = timedelta(seconds=int(time.time() - start_time))
-    print(f"\nDEM generation completed in {elapsed_time}.")
+    print(f"\nDTM generation completed in {elapsed_time}.")
 
 
 def generate_chm(input_folder, output_folder, run_name):
     """
-    Generates Canopy Height Models (CHM) for all corresponding DSM and DEM files in the given folders.
+    Generates Canopy Height Models (CHM) for all corresponding DSM and DTM files in the given folders.
 
     Parameters:
-        input_folder (str): Base folder containing DSM and DEM subfolders.
+        input_folder (str): Base folder containing DSM and DTM subfolders.
         output_folder (str): Base folder where CHM outputs will be saved.
-        run_name (str): Name of the subfolder (same for DSM, DEM, and CHM).
+        run_name (str): Name of the subfolder (same for DSM, DTM, and CHM).
 
     Returns:
         None
     """
     dsm_folder = os.path.join(input_folder, run_name, "DSM")
-    dem_folder = os.path.join(input_folder, run_name, "DEM")
+    DTM_folder = os.path.join(input_folder, run_name, "DTM")
     chm_folder = os.path.join(output_folder, run_name, "CHM")
 
     # Ensure output folder exists
@@ -295,31 +295,32 @@ def generate_chm(input_folder, output_folder, run_name):
             # Extract base name (without extension)
             base_name = os.path.splitext(os.path.basename(dsm_path))[0]
             
-            # Find the corresponding DEM file
-            dem_path = os.path.join(dem_folder, f"{base_name}.tif")
-            chm_output_path = os.path.join(chm_folder, f"{base_name}.tif")
+            # Find the corresponding DTM file
+            base_name = os.path.splitext(os.path.basename(dsm_path))[0].replace("_DSM", "")
+            DTM_path = os.path.join(DTM_folder, f"{base_name}_DTM.tif")
+            chm_output_path = os.path.join(chm_folder, f"{base_name}_CHM.tif")
 
-            if not os.path.exists(dem_path):
-                print(f"Skipping {base_name}: Corresponding DEM not found.")
+            if not os.path.exists(DTM_path):
+                print(f"Skipping {base_name}: Corresponding DTM not found.")
                 continue
 
-            # Open DSM and DEM rasters
-            with rasterio.open(dsm_path) as dsm_src, rasterio.open(dem_path) as dem_src:
+            # Open DSM and DTM rasters
+            with rasterio.open(dsm_path) as dsm_src, rasterio.open(DTM_path) as DTM_src:
                 # Read the raster data
                 dsm = dsm_src.read(1)
-                dem = dem_src.read(1)
+                dtm = DTM_src.read(1)
                 
                 # Ensure they have the same shape
-                if dsm.shape != dem.shape:
-                    print(f"Skipping {base_name}: DSM and DEM raster sizes do not match.")
+                if dsm.shape != dtm.shape:
+                    print(f"Skipping {base_name}: DSM and DTM raster sizes do not match.")
                     continue
 
-                # Calculate CHM by subtracting DEM from DSM
-                chm = dsm - dem
+                # Calculate CHM by subtracting DTM from DSM
+                chm = dsm - dtm
 
                 # Handle NoData values
                 chm[dsm == dsm_src.nodata] = dsm_src.nodata
-                chm[dem == dem_src.nodata] = dem_src.nodata
+                chm[dtm == DTM_src.nodata] = DTM_src.nodata
 
                 # Define output metadata
                 chm_meta = dsm_src.meta.copy()
@@ -329,13 +330,13 @@ def generate_chm(input_folder, output_folder, run_name):
                 with rasterio.open(chm_output_path, "w", **chm_meta) as chm_dst:
                     chm_dst.write(chm.astype(rasterio.float32), 1)
 
-                print(f"CHM saved: {chm_output_path}")
+                
 
         except Exception as e:
             print(f"Error processing {base_name}: {e}")
 
     elapsed_time = timedelta(seconds=int(time.time() - start_time))
-    print(f"\nDEM generation completed in {elapsed_time}.")
+    print(f"\n CHM generation completed in {elapsed_time}.")
 
 
 def process_all(config):
@@ -364,7 +365,7 @@ def process_all(config):
 
     if config.create_DEM:
         print("\n========== Starting DEM Generation ==========")
-        generate_dem(
+        generate_dtm(
             input_folder=config.preprocessed_dir,
             output_folder=config.results_dir,
             run_name=config.run_name,
@@ -384,4 +385,4 @@ def process_all(config):
         )
 
     elapsed_time = timedelta(seconds=int(time.time() - start_time))
-    print(f"\nProcessing generation completed in {elapsed_time}.\n")
+    print(f"\n DEM generation completed in {elapsed_time}.\n")

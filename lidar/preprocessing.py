@@ -1,108 +1,27 @@
+import pdal
+import json
+import laspy
+import shutil
+from multiprocessing import Pool
+from shapely.geometry import shape, box, mapping
 import os
 import time
-import json
-import glob
-import pdal
-import laspy
 import numpy as np
 import geopandas as gpd
-from shapely.geometry import Polygon
-from scipy.spatial import ConvexHull, QhullError
-from shapely.geometry import mapping
+from shapely.wkt import loads as wkt_loads, dumps as wkt_dumps
 from tqdm import tqdm
 from datetime import timedelta
+from core.reprojection import get_utm_epsg, reproject_las, is_utm_crs
+from core.preprocess_windowed import create_chunks_from_wkt, process_chunk, merge_and_crop_chunks
+from core.extract_footprints import extract_footprint_batch
 
 
-def extract_footprint_batch(input_folder, output_folder):
-    """Extracts footprints (convex hulls) from LAS/LAZ files and saves them in a specified folder."""
-    
-    os.makedirs(output_folder, exist_ok=True)
-    
-    print("\nStarting footprint extraction...")
-    start = time.time()
-
-    laz_files = glob.glob(os.path.join(input_folder, "*.laz")) + glob.glob(os.path.join(input_folder, "*.las"))
-
-    if not laz_files:
-        print("No LAS/LAZ files found in the input directory. Exiting.")
-        return
-
-    for laz_file in tqdm(laz_files, desc="Processing footprints", unit="file"):
-        try:
-            with laspy.open(laz_file) as file:
-                point_cloud = file.read()
-                x, y = point_cloud.x, point_cloud.y
-                las_crs = file.header.parse_crs()
-                crs = las_crs.to_epsg() if las_crs and las_crs.to_epsg() else "EPSG:4326"
-
-            unique_points = np.unique(np.vstack((x, y)).T, axis=0)
-            try:
-                hull = ConvexHull(unique_points)
-                footprint = Polygon(unique_points[hull.vertices])
-            except QhullError:
-                print(f"Warning: Convex Hull computation failed for {laz_file}. Creating an empty polygon.")
-                footprint = Polygon()
-
-            gdf = gpd.GeoDataFrame({'geometry': [footprint]}, crs=crs)
-            output_path = os.path.join(output_folder, os.path.splitext(os.path.basename(laz_file))[0] + ".gpkg")
-            gdf.to_file(output_path, driver="GPKG")
-
-        except Exception as e:
-            print(f"Error processing {laz_file}: {e}")
-
-    print(f"Footprint extraction completed in {timedelta(seconds=int(time.time() - start))}.")
-
-def is_utm_crs(las_file):
-    """Checks if a LAS/LAZ file is in a UTM projection."""
-    with laspy.open(las_file) as file:
-        crs = file.header.parse_crs()
-        crs_epsg = crs.to_epsg() if crs else None
-
-    if crs_epsg is None:
-        print(f"Warning: No CRS found in {las_file}. Assuming it needs reprojection.")
-        return False
-
-    return 32600 <= crs_epsg <= 32799  # UTM zones are EPSG:32600-32660 (Northern) & EPSG:32700-32760 (Southern)
-
-
-def get_utm_epsg(las_file):
-    """Detects the best UTM EPSG code based on the LAS file's longitude."""
-    with laspy.open(las_file) as file:
-        point_cloud = file.read()
-        avg_longitude = np.mean(point_cloud.x)
-
-    utm_zone = int((avg_longitude + 180) / 6) + 1
-    is_northern = np.mean(point_cloud.y) >= 0  # Check if the point cloud is in the northern hemisphere
-    epsg_code = 32600 + utm_zone if is_northern else 32700 + utm_zone
-
-    print(f"Detected UTM Zone: {utm_zone}, EPSG: {epsg_code}")
-    return epsg_code
-
-
-def reproject_las(input_las, output_las):
-    """Reprojects a LAS/LAZ file to UTM if it's not already in a UTM CRS."""
-    if is_utm_crs(input_las):
-        print(f"Skipping reprojection for {input_las}: Already in UTM.")
-        return input_las  # Return original file if already projected
-
-    target_epsg = get_utm_epsg(input_las)
-
-    pipeline = [
-        {"type": "readers.las", "filename": input_las},
-        {"type": "filters.reprojection", "out_srs": f"EPSG:{target_epsg}"},
-        {"type": "writers.las", "filename": output_las}
-    ]
-
-    print(f"Reprojecting {input_las} to EPSG:{target_epsg} -> {output_las}")
-    pdal.pipeline.Pipeline(json.dumps(pipeline)).execute()
-    return output_las  # Return new file path
-
-def match_footprints(target_footprint_dir, las_footprint_dir, las_file_dir):
+def match_footprints(target_footprint_dir, las_footprint_dir, las_file_dir, threshold=0.5):
     """Matches target footprints with LAS files and returns a dictionary mapping target area names to LAS file paths."""
     
     os.makedirs(las_footprint_dir, exist_ok=True)
     
-    print("\nStarting footprint matching...")
+    print("\nMatching Lidar footprints...")
     start = time.time()
 
     if not os.listdir(las_footprint_dir):
@@ -116,7 +35,7 @@ def match_footprints(target_footprint_dir, las_footprint_dir, las_file_dir):
 
     for target_fp in target_footprints:
         target_gdf = gpd.read_file(target_fp)
-        target_name = os.path.basename(target_fp)
+        target_name = os.path.splitext(os.path.basename(target_fp))[0]
         las_paths = []
 
         for las_fp in las_footprints:
@@ -126,10 +45,16 @@ def match_footprints(target_footprint_dir, las_footprint_dir, las_file_dir):
 
             joined = gpd.sjoin(las_gdf, target_gdf, predicate="intersects")
             if not joined.empty:
-                las_name = os.path.splitext(os.path.basename(las_fp))[0] + ".las"
-                las_path = os.path.join(las_file_dir, las_name)
-                if os.path.exists(las_path):
-                    las_paths.append(las_path)
+                intersection = gpd.overlay(las_gdf, target_gdf, how="intersection")
+                intersection_area = intersection.area.sum()
+                target_gef_area = target_gdf.geometry.area.sum()
+
+                if intersection_area / target_gef_area > threshold:
+                    las_name = os.path.splitext(os.path.basename(las_fp))[0] + ".las"
+                    las_path = os.path.join(las_file_dir, las_name)
+
+                    if os.path.exists(las_path):
+                        las_paths.append(las_path)
 
         target_dict[target_name] = las_paths
 
@@ -151,101 +76,82 @@ def get_las_header(las_file):
     return scale, offset, crs_epsg
 
 
-def merge_and_clean_las(las_dict, preprocessed_dir, run_name, target_footprint_dir, sor_knn, sor_multiplier):
+def process_chunk_wrapper(args):
+    """Unpacks arguments for multiprocessing."""
+    return process_chunk(*args)
+
+
+def merge_and_clean_las(las_dict, preprocessed_dir, run_name, target_footprint_dir, sor_knn, sor_multiplier, chunk_size=1000):
     """
-    Merges LAS files using PDAL while maintaining original header settings (scale, offset, CRS).
-    Handles overlapping files by preserving header information from the first file.
-    Clips merged LAS files to the target area's boundary.
-    Removes outliers using Statistical Outlier Removal (SOR) and excludes points with classification 7.
-    Reprojects the final output to UTM before writing.
+    Processes LAS files by splitting them into chunks, applying SOR filtering, merging the results,
+    and cropping them to the target area's boundary. Also ensures LAS files and target geometries are in UTM projection.
     """
     run_merged_dir = os.path.join(preprocessed_dir, run_name)
     os.makedirs(run_merged_dir, exist_ok=True)
     
-    print("\nMerging, cleaning, clipping, and reprojecting LAS files using PDAL...")
+    print("\nProcessing LAS files in chunks...")
     start = time.time()
     
     for target_fp, las_files in tqdm(las_dict.items(), desc="Processing target areas", unit="area"):
         if not las_files:
             print(f"No valid LAS files for {target_fp}. Skipping.")
             continue
-            
-        # Get header information from the first file
-        ref_scale, ref_offset, ref_crs = get_las_header(las_files[0])
-        
+
         # Load the corresponding footprint file
         footprint_path = os.path.join(target_footprint_dir, target_fp if target_fp.endswith('.gpkg') else f"{target_fp}.gpkg")
         if not os.path.exists(footprint_path):
             print(f"Footprint file {footprint_path} not found. Skipping clip.")
             continue
-        
+
         gdf = gpd.read_file(footprint_path)
-        
-        # Reproject geometry to match the point cloud CRS
-        gdf = gdf.to_crs(epsg=ref_crs)
-        target_geom = gdf["geometry"].iloc[0]
-        
-        bbox = mapping(target_geom)  # Convert to GeoJSON format
-        
-        # Create PDAL pipeline
-        pipeline = [{"type": "readers.las", "filename": las_files[0]}]
-        
-        # Add merge readers for remaining files
-        for las_file in las_files[1:]:
-            pipeline.append({"type": "readers.las", "filename": las_file})
+        temp_dir = os.path.join(run_merged_dir, target_fp, "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # Process each LAS file assigned to this target area
+        processed_chunks = []
+        process_args = []
+        for input_file in las_files:
             
-        # Add merge filter
-        pipeline.append({"type": "filters.merge"})
-        
-        # Add cropping filter (clip by bounding box)
-        pipeline.append({
-            "type": "filters.crop",
-            "polygon": json.dumps(bbox)
-        })
-        
-        # Add outlier filtering (Statistical Outlier Removal - SOR)
-        pipeline.append({
-            "type": "filters.outlier",
-            "method": "statistical",
-            "mean_k": sor_knn,
-            "multiplier": sor_multiplier
-        })
-        
-        # Add classification filter to exclude points with classification 7 (noise)
-        pipeline.append({
-            "type": "filters.range",
-            "limits": "Classification![7:7]"
-        })
-        
-        # Temporary output file before reprojection
-        temp_output_file = os.path.join(run_merged_dir, f"{os.path.splitext(target_fp)[0]}_temp.las")
-        pipeline.append({
-            "type": "writers.las",
-            "filename": temp_output_file,
-            "scale_x": str(ref_scale[0]),
-            "scale_y": str(ref_scale[1]),
-            "scale_z": str(ref_scale[2]),
-            "offset_x": str(ref_offset[0]),
-            "offset_y": str(ref_offset[1]),
-            "offset_z": str(ref_offset[2]),
-            "a_srs": f"EPSG:{ref_crs}"
-        })
+            # Ensure LAS file is reprojected to UTM
+            if not is_utm_crs(input_file):
+                utm_output_file = os.path.join(temp_dir, f"{os.path.basename(input_file).replace('.las', '_utm.las')}")
+                input_file = reproject_las(input_file, input_file)
+            
+            ref_scale, ref_offset, ref_crs = get_las_header(input_file)
+            
+            # Reproject target geometry if necessary
+            if gdf.crs.to_epsg() != ref_crs:
+                gdf = gdf.to_crs(epsg=ref_crs)
+            
+            target_geom_wkt = wkt_dumps(shape(gdf.geometry.iloc[0]))
+            chunks = create_chunks_from_wkt(target_geom_wkt, chunk_size)  # 100m chunk size
+            
+            for chunk in chunks:
+                process_args.append((input_file, chunk, temp_dir, sor_knn, sor_multiplier, ref_scale, ref_offset, ref_crs))
 
-        # Execute initial processing pipeline
-        try:
-            pdal.pipeline.Pipeline(json.dumps(pipeline)).execute()
-            print(f"Successfully processed {target_fp} (pre-reprojection)")
-        except Exception as e:
-            print(f"Error processing {target_fp}: {str(e)}")
-            continue
-        
-        # **Reproject the final output**
-        final_output_file = os.path.join(run_merged_dir, f"{os.path.splitext(target_fp)[0]}.las")
-        reprojected_file = reproject_las(temp_output_file, final_output_file)
+        # Parallel processing of chunks
+        with tqdm(total=len(process_args), desc=f"Processing {target_fp}", unit="chunk") as pbar:
+            with Pool(processes=4) as pool:  # Adjust workers as needed
+                for processed_chunk in pool.imap_unordered(process_chunk_wrapper, process_args):
+                    if processed_chunk:
+                        processed_chunks.append(processed_chunk)
+                    pbar.update(1)
 
-        print(f"Final output saved: {reprojected_file}")
+        # Merge and crop chunks
+        if processed_chunks:
+            clean_target_fp = os.path.splitext(target_fp)[0]
+            final_output_file = os.path.join(run_merged_dir, f"{clean_target_fp}.las")
+            merge_and_crop_chunks(processed_chunks, target_geom_wkt, final_output_file)
+            print(f"Final processed LAS file saved: {final_output_file}")
+        else:
+            print(f"No processed chunks available for {target_fp}.")
+
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
     print(f"\nProcessing completed in {str(timedelta(seconds=time.time() - start)).split('.')[0]}.")
+
+
 
 
 
@@ -270,6 +176,7 @@ def preprocess_all(conf):
         target_footprint_dir=config.target_area_dir, 
         las_footprint_dir=config.las_footprints_dir, 
         las_file_dir=config.las_files_dir,
+        threshold=config.overlap
         #run_name=run_name
     )
 
@@ -281,7 +188,9 @@ def preprocess_all(conf):
         preprocessed_dir=config.preprocessed_dir, 
         sor_knn=config.knn,  # Adjust based on density
         sor_multiplier=config.multiplier,  # Adjust based on noise level
-        run_name=run_name
+        run_name=run_name,
+        chunk_size=config.chunk_size
+        
     )
 
     print(f"\nPreprocessing completed in {str(timedelta(seconds=time.time() - start)).split('.')[0]}.\n")
