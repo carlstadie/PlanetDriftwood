@@ -11,6 +11,12 @@ from tqdm import tqdm
 from scipy.spatial import KDTree
 import rasterio
 import shutil 
+import laspy
+from shapely.geometry import box
+import multiprocessing
+from shapely.wkt import loads as wkt_loads, dumps as wkt_dumps
+
+from core.processing_windowed import create_chunks_from_wkt, process_chunk_to_dsm, merge_chunks
 
 
 def check_resolution(las_file, resolution, method="sampling", num_samples=10000):
@@ -56,115 +62,122 @@ def check_resolution(las_file, resolution, method="sampling", num_samples=10000)
     return avg_distance, avg_distance <= resolution
 
 
-def check_classification_exists(las_file):
-    """
-    Checks if a LAS/LAZ file contains classification information.
+def get_las_footprint_wkt(las_file):
+    """Extracts the WKT footprint (bounding box) from a LAS file."""
+    
+    with laspy.open(las_file) as las:
+        header = las.header
+        min_x, min_y, max_x, max_y = header.min[0], header.min[1], header.max[0], header.max[1]
 
-    Returns:
-        bool: True if classification exists, False otherwise.
-    """
-    try:
-        with laspy.open(las_file) as file:
-            return "classification" in file.header.point_format.dimension_names
-    except Exception as e:
-        print(f"Error checking classification for {las_file}: {e}")
-        return False  # Assume no classification if an error occurs
+    # Create a bounding box polygon
+    footprint = box(min_x, min_y, max_x, max_y)
+    return footprint.wkt  # Convert to WKT format
+
+def process_las_file(las_file, temp_folder, final_output_folder, resolution, method, fill_gaps, counter, chunk_size):
+    """Processes a single LAS file: generates DSM chunks, merges them, and fills gaps if needed."""
+    
+    base_name = os.path.splitext(os.path.basename(las_file))[0]
+    
+    # Generate WKT footprint from the LAS file
+    target_wkt = get_las_footprint_wkt(las_file)
+
+    avg_spacing, is_resolution_ok = check_resolution(las_file, resolution, method)
+    if not is_resolution_ok:
+        print(f"Warning: DSM resolution ({resolution}m) is finer than average point spacing ({avg_spacing:.3f}m).")
+        print("   Consider increasing the resolution to avoid interpolation gaps.")
+
+    # Create a temporary directory for DSM chunks
+    temp_dsm_dir = os.path.join(temp_folder, base_name)
+    os.makedirs(temp_dsm_dir, exist_ok=True)
+
+    final_dsm_path = os.path.join(final_output_folder, f"{base_name}_DSM.tif")
+    
+    # Generate overlapping chunks from WKT
+    _, large_chunks = create_chunks_from_wkt(target_wkt, chunk_size=chunk_size, overlap=0.2)
+
+    dsm_chunks = []
+
+    # Local progress bar for chunk processing (each file)
+    for chunk in tqdm(large_chunks, desc=f"Processing Chunks ({base_name})", unit="chunk", leave=False):
+        chunk_dsm_path = process_chunk_to_dsm(las_file, chunk, temp_dsm_dir, resolution)
+        if chunk_dsm_path:
+            dsm_chunks.append(chunk_dsm_path)
+
+    # Merge chunks into a single DSM
+    if temp_dsm_dir:
+        chunk_files = sorted(glob.glob(os.path.join(temp_dsm_dir, "*.tif")))
+
+        merged_dsm = merge_chunks(chunk_files, final_dsm_path)
+        
+        # Fill gaps if needed
+        if fill_gaps and merged_dsm:
+            filled_dsm_path = os.path.join(temp_dsm_dir, f"{base_name}_dsm_filled.tif")
+            subprocess.run([
+                "gdal_fillnodata.py",
+                "-md", "10",
+                "-si", "2",
+                merged_dsm,
+                filled_dsm_path
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.replace(filled_dsm_path, final_dsm_path)
+
+    else:
+        print(f"No DSM chunks found for {base_name}. Skipping merge.")
+
+    # Cleanup temporary directory
+    if os.path.exists(temp_dsm_dir):
+        shutil.rmtree(temp_dsm_dir, ignore_errors=True)
+
+    # Increment the counter (safe in multiprocessing)
+    counter.value += 1
+
+    return final_dsm_path
 
 
-def get_bounding_box(las_file):
-    """Retrieves the bounding box (extent) of a LAS/LAZ file."""
-    with laspy.open(las_file) as file:
-        point_cloud = file.read()
-        min_x, min_y = np.min(np.vstack((point_cloud.x, point_cloud.y)), axis=1)
-        max_x, max_y = np.max(np.vstack((point_cloud.x, point_cloud.y)), axis=1)
-    return min_x, max_x, min_y, max_y
-
-
-def generate_dsm(input_folder, output_folder, run_name, method, resolution, fill_gaps=True):
-    # Define the final output folder and ensure it exists.
+def generate_dsm(input_folder, output_folder, run_name, method, resolution, chunk_size, fill_gaps=True):
+    """Parallelized DSM generation for all LAS files in a folder."""
+    
+    # Ensure final output folders exist
     final_output_folder = os.path.join(output_folder, run_name, 'DSM')
     os.makedirs(final_output_folder, exist_ok=True)
     
-    # Create a temporary folder for intermediate outputs.
     temp_folder = os.path.join(final_output_folder, "temp")
     os.makedirs(temp_folder, exist_ok=True)
-    
-    #print("\nStarting DSM generation...")
+
     start_time = time.time()
-    
+
+    # Find all LAS/LAZ files
     las_files = glob.glob(os.path.join(input_folder, run_name, "*.las")) + \
                 glob.glob(os.path.join(input_folder, run_name, "*.laz"))
-    
+
     if not las_files:
         print("No LAS/LAZ files found. Exiting DSM generation.")
         return
-    
-    for las_file in tqdm(las_files, desc="Processing DSMs", unit="file"):
-        try:
-            base_name = os.path.splitext(os.path.basename(las_file))[0]
-            # Use the temporary folder for intermediate files.
-            temp_dsm_path = os.path.join(temp_folder, f"{base_name}_dsm.tif")
-            temp_filled_dsm_path = os.path.join(temp_folder, f"{base_name}_dsm_filled.tif")
-            # Final DSM will be saved directly in the final output folder.
-            final_dsm_path = os.path.join(final_output_folder, f"{base_name}_DSM.tif")
-            
-            # Check resolution suitability.
-            avg_spacing, is_resolution_ok = check_resolution(las_file, resolution, method)
-            if not is_resolution_ok:
-                print(f"Warning: DSM resolution ({resolution}m) is finer than average point spacing ({avg_spacing:.3f}m).")
-                print("Consider increasing the resolution to avoid interpolation gaps.")
-            
-            # Check if classification exists (if needed).
-            has_classification = check_classification_exists(las_file)
-            
-            # Define the PDAL pipeline using the temporary DSM path.
-            pipeline = [
-                {"type": "readers.las", "filename": las_file},
-                {"type": "filters.ferry", "dimensions": "Z=>Elevation"},
-                {
-                    "type": "filters.range",
-                    "limits": "Classification[0:0]"  # Use all points for initial DSM
-                },
-                {
-                    "type": "writers.gdal",
-                    "filename": temp_dsm_path,
-                    "resolution": avg_spacing,
-                    "output_type": "max",
-                    "nodata": -9999,
-                    "gdalopts": "COMPRESS=LZW"
-                }
-            ]
-            
-            # Run PDAL pipeline.
-            pdal.pipeline.Pipeline(json.dumps(pipeline)).execute()
-            #print(f"DSM saved (temp): {temp_dsm_path}")
-            
-            # Fill gaps using GDAL if enabled.
-            if fill_gaps:
-                subprocess.run([
-                    "gdal_fillnodata.py",
-                    "-md", "10",
-                    "-si", "2",
-                    temp_dsm_path,
-                    temp_filled_dsm_path
-                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                #print(f"Filled DSM saved (temp): {temp_filled_dsm_path}")
-                # Move the gap-filled DSM to the final output folder.
-                os.replace(temp_filled_dsm_path, final_dsm_path)
-                #print(f"Final DSM saved as: {final_dsm_path}")
-            else:
-                # If not filling gaps, move the initial DSM.
-                os.rename(temp_dsm_path, final_dsm_path)
-                #print(f"Final DSM saved as: {final_dsm_path}")
+
+    # Use multiprocessing Manager to create a shared counter
+    with multiprocessing.Manager() as manager:
+        counter = manager.Value('i', 0)  # Shared integer counter
+
+        # Progress bar in the main process
+        with tqdm(total=len(las_files), desc="Processing LAS Files", unit="file") as progress_bar:
+            with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+                async_results = [
+                    pool.apply_async(
+                        process_las_file, 
+                        (las_file, temp_folder, final_output_folder, resolution, method, fill_gaps, counter, chunk_size)
+                    ) for las_file in las_files
+                ]
+
+                # Update progress bar dynamically
+                while counter.value < len(las_files):
+                    progress_bar.n = counter.value
+                    progress_bar.refresh()
+                    time.sleep(1)  # Small delay to prevent excessive updates
                 
-        except Exception as e:
-            print(f"Error processing {las_file}: {e}")
-    
-    # Delete the temporary folder after processing all files.
-    if os.path.exists(temp_folder):
-        shutil.rmtree(temp_folder)
-        #print("Temporary files have been deleted.")
-    
+                # Wait for all processes to finish
+                for result in async_results:
+                    result.get()
+
     elapsed_time = timedelta(seconds=int(time.time() - start_time))
     print(f"\nDSM generation completed in {elapsed_time}.")
 
@@ -357,6 +370,7 @@ def process_all(config):
             output_folder=config.results_dir,
             run_name=config.run_name,
             resolution=config.resolution,
+            chunk_size=config.chunk_size,
             fill_gaps=config.fill_gaps, 
             method=config.point_density_method
         )

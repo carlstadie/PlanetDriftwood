@@ -40,8 +40,8 @@ class Configuration:
         # ------- PROCESSING --------
 
         self.create_DSM = True
-        self.create_DEM = True
-        self.create_CHM = True
+        self.create_DEM = False
+        self.create_CHM = False
 
         self.fill_gaps = True # use IDW to close gaps in rasters
         self.resolution = 1 # resoltion of generated rasters in meter, can be 'Auto' or number
