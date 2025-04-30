@@ -4,11 +4,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import os
-from scipy.stats import norm
+from scipy.stats import norm, gaussian_kde
 
 # Ensure the output directory exists
 output_dir = "/isipd/projects/p_planetdw/data/outputs/final/prob_0506/tests/"
 os.makedirs(output_dir, exist_ok=True)
+
+
+def compute_bayes_factor_savage_dickey(prior_samples, posterior_samples, ref_val=0):
+    """
+    Compute the Bayes Factor using the Savage-Dickey Density Ratio method.
+    
+    Parameters:
+    prior_samples (array): Samples from the prior distribution
+    posterior_samples (array): Samples from the posterior distribution
+    ref_val (float): The value of the null hypothesis (typically 0)
+    
+    Returns:
+    float: Bayes Factor (BF_01, evidence for the null hypothesis)
+    """
+    kde_prior = gaussian_kde(prior_samples)
+    kde_posterior = gaussian_kde(posterior_samples)
+    
+    prior_density_at_ref = kde_prior(ref_val)[0]
+    posterior_density_at_ref = kde_posterior(ref_val)[0]
+    
+    bayes_factor = prior_density_at_ref / posterior_density_at_ref
+    return bayes_factor
 
 # Load the dataset for area
 gdf = gpd.read_file(r'/isipd/projects/p_planetdw/data/outputs/final/prob_0506/dw_final_cluster_info.gpkg')
@@ -44,6 +66,7 @@ with pm.Model() as model1:
 
     # Sampling
     trace1 = pm.sample(2000, return_inferencedata=True, tune=1000, chains=4, cores=2)
+    prior_samples1 = pm.sample_prior_predictive(8000)['prior']['delta']
 
 # Plot posterior distribution of the difference in means for the first test (area)
 delta_posterior = trace1.posterior['delta'].values.flatten()
@@ -53,14 +76,9 @@ plt.xlabel('Mean Difference (Delta)')
 plt.savefig(f"{output_dir}Delta_Coast_area_posterior.png")
 plt.close()
 
-# Compute the Bayes Factor for the first test (area)
-delta_posterior_density = az.kde(delta_posterior)
-posterior_at_zero = delta_posterior_density[1][np.argmin(np.abs(delta_posterior_density[0]))]
-prior_std_delta = np.sqrt(2) * mu_s_area
-prior_at_zero = norm.pdf(0, loc=0, scale=prior_std_delta)
 
 # Compute BF10 (evidence for H_A)
-bayes_factor = posterior_at_zero / prior_at_zero
+bayes_factor = compute_bayes_factor_savage_dickey(prior_samples1, delta_posterior, ref_val=0)
 with open(f"{output_dir}Delta_Coast_area_bayes_factor.txt", "w") as f:
     f.write(f"Bayes Factor (BF10) in favor of the alternative hypothesis (delta != 0): {bayes_factor:.2f}\n")
 
@@ -107,6 +125,7 @@ with pm.Model() as model2:
 
     # Sampling
     trace2 = pm.sample(2000, return_inferencedata=True, tune=1000, chains=4, cores=2)
+    prior_samples2 = pm.sample_prior_predictive(8000)['prior']['delta']
 
 # Plot posterior distribution of the difference in means for the second test (area)
 delta_posterior2 = trace2.posterior['delta'].values.flatten()
@@ -123,7 +142,7 @@ prior_std_delta2 = np.sqrt(2) * mu_s_area_na
 prior_at_zero2 = norm.pdf(0, loc=0, scale=prior_std_delta2)
 
 # Compute BF10 (evidence for H_A)
-bayes_factor2 = posterior_at_zero2 / prior_at_zero2
+bayes_factor2 = compute_bayes_factor_savage_dickey(prior_samples2, delta_posterior2, ref_val=0)
 with open(f"{output_dir}NA_NonNA_area_bayes_factor.txt", "w") as f:
     f.write(f"Bayes Factor (BF10) in favor of the alternative hypothesis (delta != 0): {bayes_factor2:.2f}\n")
 
@@ -173,6 +192,7 @@ with pm.Model() as model3:
 
     # Sampling
     trace3 = pm.sample(2000, return_inferencedata=True, tune=1000, chains=4, cores=2)
+    prior_samples3 = pm.sample_prior_predictive(8000)['prior']['delta']
 
 # Plot posterior distribution of the difference in means for the first test (density)
 delta_posterior3 = trace3.posterior['delta'].values.flatten()
@@ -189,7 +209,7 @@ prior_std_delta3 = np.sqrt(2) * mu_s_density
 prior_at_zero3 = norm.pdf(0, loc=0, scale=prior_std_delta3)
 
 # Compute BF10 (evidence for H_A)
-bayes_factor3 = posterior_at_zero3 / prior_at_zero3
+bayes_factor3 = compute_bayes_factor_savage_dickey(prior_samples3, delta_posterior3, ref_val=0)
 with open(f"{output_dir}Delta_Coast_density_bayes_factor.txt", "w") as f:
     f.write(f"Bayes Factor (BF10) in favor of the alternative hypothesis (delta != 0): {bayes_factor3:.2f}\n")
 
@@ -238,6 +258,7 @@ with pm.Model() as model4:
 
     # Sampling
     trace4 = pm.sample(2000, return_inferencedata=True, tune=1000, chains=4, cores=2)
+    prior_samples4 = pm.sample_prior_predictive(8000)['prior']['delta']
 
 # Plot posterior distribution of the difference in means for the second test (density)
 delta_posterior4 = trace4.posterior['delta'].values.flatten()
@@ -254,7 +275,7 @@ prior_std_delta4 = np.sqrt(2) * mu_s_density_na
 prior_at_zero4 = norm.pdf(0, loc=0, scale=prior_std_delta4)
 
 # Compute BF10 (evidence for H_A)
-bayes_factor4 = posterior_at_zero4 / prior_at_zero4
+bayes_factor4 = compute_bayes_factor_savage_dickey(prior_samples4, delta_posterior4, ref_val=0)
 with open(f"{output_dir}NA_NonNA_density_bayes_factor.txt", "w") as f:
     f.write(f"Bayes Factor (BF10) in favor of the alternative hypothesis (delta != 0): {bayes_factor4:.2f}\n")
 
@@ -349,119 +370,10 @@ with open(f"{output_dir}NA_NonNA_density_mannwhitney.txt", "w") as f:
         f.write("Interpretation: No significant difference between groups.\n")
 
 
-import pandas as pd
-import geopandas as gpd
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy import stats
-from scipy.stats import linregress
 
-# Load the GeoPackage
-file_path = r'/isipd/projects/p_planetdw/data/outputs/final/prob_0506/catchments.gpkg'
-data = gpd.read_file(file_path)
+# ========== CORELATIONS ===========
 
-# Extract variables
-bin_midpoints = data['boreal_area']
-area_by_bin = data['area_sum']
 
-# Use Spearman correlation
-spearman_corr_prop, spearman_p_prop = stats.spearmanr(bin_midpoints, area_by_bin)
-
-# Use linear regression
-slope_regression, intercept_regression, _, p_value_regression, _ = linregress(bin_midpoints, area_by_bin)
-
-# Print results
-print(f"Spearman correlation (perc_boreal vs area_sum): {spearman_corr_prop:.4f}")
-print(f"Spearman p-value: {spearman_p_prop:.4e}")
-print(f"Linear regression slope: {slope_regression:.4f}, intercept: {intercept_regression:.4f}")
-print(f"Linear regression p-value: {p_value_regression:.4e}")
-
-# Data preparation for Bayesian analysis
-x = bin_midpoints
-y = area_by_bin
-
-# Standardize data
-x_standardized = (x - np.mean(x)) / np.std(x)
-y_standardized = (y - np.mean(y)) / np.std(y)
-
-# Null Model (H0: No Correlation)
-with pm.Model() as null_model:
-    sigma_x = pm.HalfNormal("sigma_x", sigma=1)
-    sigma_y = pm.HalfNormal("sigma_y", sigma=1)
-    
-    # Covariance matrix (no correlation, rho=0)
-    cov = pm.math.stack([[sigma_x**2, 0],
-                         [0, sigma_y**2]])
-    
-    observed = pm.MvNormal("observed", mu=[0, 0], cov=cov, observed=np.column_stack([x_standardized, y_standardized]))
-    
-    # Sample posterior
-    trace_null = pm.sample(
-        2000,
-        tune=1000,
-        return_inferencedata=True,
-        target_accept=0.95,
-        idata_kwargs={"log_likelihood": True}  # Include log-likelihood
-    )
-
-# Alternative Model (H1: Correlation Exists)
-with pm.Model() as alt_model:
-    rho = pm.Uniform("rho", -1, 1)  # Correlation coefficient
-    sigma_x = pm.HalfNormal("sigma_x", sigma=1)
-    sigma_y = pm.HalfNormal("sigma_y", sigma=1)
-    
-    # Covariance matrix (includes correlation)
-    cov = pm.math.stack([[sigma_x**2, rho * sigma_x * sigma_y],
-                         [rho * sigma_x * sigma_y, sigma_y**2]])
-    
-    # Student's t-likelihood for robustness
-    observed = pm.MvNormal("observed", mu=[0, 0], cov=cov, observed=np.column_stack([x_standardized, y_standardized]))
-    # Sample posterior
-    trace_alt = pm.sample(
-        2000,
-        tune=1000,
-        return_inferencedata=True,
-        target_accept=0.95,
-        idata_kwargs={"log_likelihood": True}  # Include log-likelihood
-    )
-
-# Compute marginal likelihoods using LOO
-loo_null = az.loo(trace_null)
-loo_alt = az.loo(trace_alt)
-
-# Check Pareto k values
-print("Pareto k values (Alternative):", loo_alt.pareto_k)
-
-# Extract log marginal likelihoods
-log_marginal_null = loo_null.elpd_loo
-log_marginal_alt = loo_alt.elpd_loo
-
-# Compute Bayes Factor
-bf10 = np.exp(log_marginal_alt - log_marginal_null)
-
-# Print Bayes Factor results
-print(f"Log Marginal Likelihood (Null): {log_marginal_null:.2f}")
-print(f"Log Marginal Likelihood (Alternative): {log_marginal_alt:.2f}")
-print(f"Bayes Factor (BF10): {bf10:.2f}")
-
-# Compute WAIC for both models
-waic_null = az.waic(trace_null)
-waic_alt = az.waic(trace_alt)
-
-# Print WAIC results
-try:
-    print(f"WAIC Null: {waic_null.waic:.2f}, WAIC Alt: {waic_alt.waic:.2f}")
-    print(f"WAIC p_waic (Null): {waic_null.p_waic:.2f}, WAIC p_waic (Alt): {waic_alt.p_waic:.2f}")
-except AttributeError:
-    print(f"WAIC Null:\n{waic_null}")
-    print(f"WAIC Alt:\n{waic_alt}")
-
-# Optional: Fallback to manual model comparison
-print("\nConsider alternative metrics like Bayes Factor or posterior predictive checks if WAIC is unreliable.")
-
-rho_summary = az.summary(trace_alt, var_names=["rho"], hdi_prob=0.95)
-print("\nPosterior Summary for rho:")
-print(rho_summary)
 
 import pandas as pd
 import geopandas as gpd
